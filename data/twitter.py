@@ -19,7 +19,7 @@ def load_csv_to_postgresql(csv_file_path, table_name="stock_alpha_news"):
 
     # Ensure the columns are in the right order and format
     # This assumes the CSV columns match the following structure:
-    expected_columns = ['Ticker', 'Title', 'Published_Date', 'Source', 'Summary', 'Url']
+    expected_columns = ['Ticker', 'Title', 'Published_Date', 'Source', 'Summary', 'URL']
 
     # Check if the CSV has the required columns
     if not all(col in df.columns for col in expected_columns):
