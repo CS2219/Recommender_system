@@ -1,6 +1,6 @@
 import pandas as pd
-from sqlalchemy import create_engine, types
 import psycopg2
+from psycopg2 import sql
 
 # PostgreSQL connection details
 DB_PARAMS = {
@@ -11,47 +11,58 @@ DB_PARAMS = {
     'port': '5432'
 }
 
-# Function to load the CSV data into PostgreSQL
+# Function to load the CSV data into PostgreSQL using INSERT statements
 def load_csv_to_postgresql(csv_file_path, table_name="stock_alpha_news"):
-    """Load data from a CSV file into PostgreSQL."""
+    """Load data from a CSV file into PostgreSQL using explicit INSERT statements."""
+    
     # Read the CSV file using pandas
     df = pd.read_csv(csv_file_path)
-
+    
     # Ensure the columns are in the right order and format
-    # This assumes the CSV columns match the following structure:
     expected_columns = ['Ticker', 'Title', 'Published_Date', 'Source', 'Summary', 'URL']
-
+    
     # Check if the CSV has the required columns
     if not all(col in df.columns for col in expected_columns):
-        print("CSV file is missing required columns. Ensure the columns are: 'ticker', 'title', 'published_date', 'source', 'summary', 'url'.")
+        print("CSV file is missing required columns. Ensure the columns are: 'Ticker', 'Title', 'Published_Date', 'Source', 'Summary', 'URL'.")
         return
-
-    # Ensure the 'published_date' column is in datetime format
-    df['Published_Date'] = pd.to_datetime(df['Published_Date'], errors='coerce')
-
-    # Ensure data types are compatible with PostgreSQL
-    dtype = {
-        'ticker': types.String(10),
-        'title': types.Text(),
-        'published_date': types.DateTime(),
-        'source': types.String(255),
-        'summary': types.Text(),
-        'url': types.Text()
-    }
-
-    # Create SQLAlchemy engine for PostgreSQL connection
-    engine = create_engine(f'postgresql://{DB_PARAMS["user"]}:{DB_PARAMS["password"]}@{DB_PARAMS["host"]}/{DB_PARAMS["dbname"]}')
     
-    # Insert data into PostgreSQL, appending if the table already exists
+    # Ensure the 'Published_Date' column is in datetime format
+    df['Published_Date'] = pd.to_datetime(df['Published_Date'], errors='coerce')
+    
+    # Connect to PostgreSQL
     try:
-        with engine.connect() as conn:
-            # Insert data into PostgreSQL, replacing any existing data in the table
-            df.to_sql(table_name, conn, if_exists='append', index=False, dtype=dtype)
-            print(f"Data successfully loaded into {table_name} table.")
+        connection = psycopg2.connect(
+            dbname=DB_PARAMS['dbname'],
+            user=DB_PARAMS['user'],
+            password=DB_PARAMS['password'],
+            host=DB_PARAMS['host'],
+            port=DB_PARAMS['port']
+        )
+        cursor = connection.cursor()
+
+        # Prepare the SQL insert statement template
+        insert_query = sql.SQL("""
+            INSERT INTO {} (ticker, title, published_date, source, summary, url)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """).format(sql.Identifier(table_name))
+        
+        # Iterate through the DataFrame and execute INSERT for each row
+        for index, row in df.iterrows():
+            values = (row['Ticker'], row['Title'], row['Published_Date'], row['Source'], row['Summary'], row['URL'])
+            cursor.execute(insert_query, values)
+        
+        # Commit the transaction
+        connection.commit()
+        print(f"Data successfully inserted into {table_name} table.")
+    
     except Exception as e:
         print(f"Error occurred while inserting data: {e}")
     finally:
-        conn.close()
+        # Close the cursor and connection
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
 
 # Main function to load the CSV data
 def main():
