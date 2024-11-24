@@ -1,62 +1,47 @@
+# feature_engineering.py
 import pandas as pd
 import numpy as np
-import os
-from sqlalchemy import create_engine
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+def feature_engineering(file_path='df_cleaned.csv'):
+    """
+    Load df_cleaned.csv, perform feature engineering, and return the updated DataFrame.
+    """
+    # Load the df_cleaned DataFrame from the CSV file
+    df_cleaned = pd.read_csv(file_path)
 
-# Calculate moving averages and RSI
-def calculate_features(data):
+    # Ensure Date column is a datetime object
+    df_cleaned['Date'] = pd.to_datetime(df_cleaned['Date'])
 
-    # Calculate 50-day and 200-day moving averages
-    data['50_MA'] = data['Close'].rolling(window=50).mean()
-    data['200_MA'] = data['Close'].rolling(window=200).mean()
+    # Sort by Date for time-series calculations
+    df_cleaned = df_cleaned.sort_values(by=['Ticker', 'Date'])
 
-    # Calculate Relative Strength Index (RSI)
-    delta = data['Close'].diff()
+    # Calculate technical indicators
+    df_cleaned['SMA_50'] = df_cleaned.groupby('Ticker')['Close'].transform(lambda x: x.rolling(window=50).mean())
+    df_cleaned['EMA_50'] = df_cleaned.groupby('Ticker')['Close'].transform(lambda x: x.ewm(span=50, adjust=False).mean())
+
+    # Bollinger Bands
+    df_cleaned['Bollinger_Upper'] = df_cleaned['SMA_50'] + (df_cleaned['Close'].rolling(window=20).std() * 2)
+    df_cleaned['Bollinger_Lower'] = df_cleaned['SMA_50'] - (df_cleaned['Close'].rolling(window=20).std() * 2)
+
+    # Relative Strength Index (RSI)
+    delta = df_cleaned['Close'].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
     avg_gain = gain.rolling(window=14).mean()
     avg_loss = loss.rolling(window=14).mean()
     rs = avg_gain / avg_loss
-    data['RSI'] = 100 - (100 / (1 + rs))
+    df_cleaned['RSI'] = 100 - (100 / (1 + rs))
 
-    # Calculate Volume-based Feature (for simplicity, let's use Volume itself)
-    data['Volume'] = data['Volume']
+    # Lagged Features
+    df_cleaned['Close_Lag1'] = df_cleaned.groupby('Ticker')['Close'].shift(1)
+    df_cleaned['Close_Lag2'] = df_cleaned.groupby('Ticker')['Close'].shift(2)
+    df_cleaned['Daily_Return'] = df_cleaned.groupby('Ticker')['Close'].pct_change()
 
-    return data
+    # Add sentiment-based features (assuming the Sentiment_Score column exists)
+    df_cleaned['Positive_Sentiment'] = df_cleaned['Sentiment_Score'].apply(lambda x: 1 if x > 0 else 0)
+    df_cleaned['Negative_Sentiment'] = df_cleaned['Sentiment_Score'].apply(lambda x: 1 if x < 0 else 0)
 
-# Load stock data from PostgreSQL
-def load_stock_data():
-    # Create connection string from environment variables
-    conn_string = f'postgresql://{os.getenv("POSTGRES_USER")}:{os.getenv("POSTGRES_PASSWORD")}@{os.getenv("POSTGRES_HOST")}:{os.getenv("POSTGRES_PORT")}/{os.getenv("POSTGRES_DB")}'
-    engine = create_engine(conn_string)
+    # Drop rows with missing values after creating features
+    df_cleaned = df_cleaned.dropna()
 
-    # Read stock data from PostgreSQL
-    data = pd.read_sql('SELECT * FROM stock_prices', engine)
-    return data
-
-# Save features back to PostgreSQL
-def save_features_to_postgres(features):
-    # Create connection string from environment variables
-    conn_string = f'postgresql://{os.getenv("POSTGRES_USER")}:{os.getenv("POSTGRES_PASSWORD")}@{os.getenv("POSTGRES_HOST")}:{os.getenv("POSTGRES_PORT")}/{os.getenv("POSTGRES_DB")}'
-    engine = create_engine(conn_string)
-
-    # Save the calculated features back to the database
-    features.to_sql('stock_features', engine, if_exists='replace', index=False)
-
-# Main function for feature engineering
-def main():
-    # Load stock data from PostgreSQL
-    stock_data = load_stock_data()
-
-    # Perform feature engineering
-    features = calculate_features(stock_data)
-
-    # Save the calculated features back to the database
-    save_features_to_postgres(features)
-
-if __name__ == "__main__":
-    main()
+    return df_cleaned

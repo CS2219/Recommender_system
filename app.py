@@ -1,72 +1,72 @@
+import openai
+import shap
+import joblib
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-import joblib
-from sqlalchemy import create_engine
-from dotenv import load_dotenv
 import streamlit as st
-import os
 
-# Load environment variables
-load_dotenv()
+# Load OpenAI API Key for Generative AI
+openai.api_key = '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'
 
-# Load the trained model
-model = joblib.load("models/stock_model.pkl")
+# Load model and scaler
+model = joblib.load('stock_recommender_model.pkl')
+#scaler = joblib.load('scaler.pkl')
 
-# Function to load stock data
-def load_stock_data(ticker):
-    conn_string = f'postgresql://{os.getenv("POSTGRES_USER")}:{os.getenv("POSTGRES_PASSWORD")}@{os.getenv("POSTGRES_HOST")}:{os.getenv("POSTGRES_PORT")}/{os.getenv("POSTGRES_DB")}'
-    engine = create_engine(conn_string)
-    query = f'SELECT * FROM stock_prices WHERE "Ticker" = \'{ticker}\''
-    data = pd.read_sql(query, engine)
-    return data
+# Function to Generate Explanations Using GPT-3
+def generate_explanation(shap_values, feature_names):
+    prompt = "Explain the following SHAP values for stock recommendation in human-friendly language:\n"
+    for i, feature in enumerate(feature_names):
+        prompt += f"Feature: {feature}, SHAP Value: {shap_values[i]:.4f}\n"
+    
+    # Request explanation from GPT-3
+    response = openai.Completion.create(
+        engine="text-davinci-003",  # or "gpt-4" if available
+        prompt=prompt,
+        max_tokens=150
+    )
+    
+    explanation = response.choices[0].text.strip()
+    return explanation
 
-# Main application
-def main():
-    st.title("Stock Recommendation System")
-    st.write("Enter a stock ticker to get a Buy/Sell recommendation.")
+# Streamlit UI Setup
+st.title("Stock Recommendation System")
+ticker = st.text_input("Enter stock ticker (e.g., AAPL, MSFT):")
 
-    ticker = st.text_input("Enter Stock Ticker:", "")
+# Load the cleaned dataset
+df_cleaned = pd.read_csv('df_cleaned.csv')
 
-    if st.button("Get Recommendation"):
-        if not ticker:
-            st.error("Please enter a stock ticker.")
-            return
+# Function to get recommendation and explanation
+def get_recommendation(ticker):
+    stock_data = df_cleaned[df_cleaned['Ticker'] == ticker].tail(1)
+    
+    if stock_data.empty:
+        st.write(f"Sorry, no data available for ticker {ticker}.")
+        return
 
-        # Load stock data
-        data = load_stock_data(ticker)
+    input_features = stock_data[['SMA_50', 'EMA_50', 'Bollinger_Upper', 'Bollinger_Lower', 'RSI', 'Sentiment_Score', 'Close_Lag1', 'Daily_Return']]
+    input_scaled = scaler.transform(input_features)
 
-        # Check if data is empty
-        if data.empty:
-            st.error("No data found for the given stock ticker.")
-            return
+    # Make prediction
+    prediction = model.predict(input_scaled)
 
-        # Calculate features
-        data['50_MA'] = data['Close'].rolling(window=50).mean()
-        data['200_MA'] = data['Close'].rolling(window=200).mean()
-        delta = data['Close'].diff()
-        gain = delta.where(delta > 0, 0)
-        loss = -delta.where(delta < 0, 0)
-        avg_gain = gain.rolling(window=14).mean()
-        avg_loss = loss.rolling(window=14).mean()
-        rs = avg_gain / avg_loss
-        data['RSI'] = 100 - (100 / (1 + rs))
+    if prediction == 1:
+        st.write(f"Recommendation for {ticker}: **BUY**")
+    else:
+        st.write(f"Recommendation for {ticker}: **SELL**")
+    
+    # Explain the prediction using SHAP values
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(input_scaled)
 
-        # Prepare features for prediction
-        features = data[['50_MA', '200_MA', 'RSI', 'Volume']].dropna()
+    if isinstance(shap_values, list):
+        shap_values = shap_values[1]  # For binary classification, use the positive class
 
-        if features.empty:
-            st.error("Insufficient data to calculate features for the given stock ticker.")
-            return
+    # Generate explanation for the top features using Generative AI (GPT-3)
+    explanation = generate_explanation(shap_values[0], input_features.columns)
+    
+    st.subheader("Model Explanation")
+    st.write(explanation)
 
-        # Make prediction using the trained model
-        predictions = model.predict(features)
-
-        # Output the recommendation
-        if predictions[-1] == 1:
-            st.success("Recommendation: BUY")
-        else:
-            st.warning("Recommendation: SELL")
-
-if __name__ == "__main__":
-    main()
+# Run the prediction and explanation based on user input
+if ticker:
+    get_recommendation(ticker)
