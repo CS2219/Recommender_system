@@ -1,38 +1,40 @@
 import yfinance as yf
 import requests
-import pandas as pd
+from alpha_vantage.fundamentaldata import FundamentalData
+import os
 
 # Fetch stock data from Yahoo Finance
-def get_stock_data_yahoo(ticker, start_date, end_date):
-    stock_data = yf.download(ticker, start=start_date, end=end_date)
-    return stock_data
+def fetch_stock_data(ticker):
+    stock = yf.Ticker(ticker)
+    stock_history = stock.history(period="1mo")  # Fetch historical data for 1 month
+    stock_info = stock.info
+    # Check if necessary data is available
+    if 'currentPrice' not in stock_info:
+        print(f"Warning: Missing 'currentPrice' for {ticker}.")
+    
+    return stock_history, stock_info
 
-# Fetch stock data from Alpha Vantage
-def get_stock_data_alpha_vantage(ticker, api_key):
-    url = f'https://www.alphavantage.co/query'
-    params = {
-        'function': 'TIME_SERIES_DAILY',
-        'symbol': ticker,
-        'apikey': api_key
-    }
-    response = requests.get(url, params=params)
-    data = response.json()
-    if 'Time Series (Daily)' in data:
-        df = pd.DataFrame.from_dict(data['Time Series (Daily)'], orient='index')
-        df = df.rename(columns={'1. open': 'open', '2. high': 'high', '3. low': 'low', '4. close': 'close', '5. volume': 'volume'})
-        df.index = pd.to_datetime(df.index)
-        return df
+def fetch_stock_news(ticker):
+    # Replace with your actual NewsAPI key
+    api_key = 'API_KEY'  # Ensure your API key is set here
+    url = f"https://newsapi.org/v2/everything?q={ticker}&apiKey={api_key}"
+    response = requests.get(url)
+    news_data = response.json()
+    # Check if the 'articles' key exists
+    if 'articles' in news_data:
+        return news_data['articles']
     else:
-        return pd.DataFrame()
+        return []  
 
-# Fetch the latest news using NewsAPI
-def get_latest_news(query, api_key):
-    url = f'https://newsapi.org/v2/everything'
-    params = {
-        'q': query,
-        'apiKey': api_key,
-        'language': 'en',
-        'pageSize': 5  # Get the latest 5 articles
-    }
-    response = requests.get(url, params=params)
-    return response.json()['articles']
+
+# Fetch financial data from Alpha Vantage
+def fetch_financial_data(ticker):
+    api_key = 'API_KEY'
+    fd = FundamentalData(api_key)
+    try:
+        # Fetching the company overview
+        company_overview, _ = fd.get_company_overview(ticker)
+        return company_overview
+    except Exception as e:
+        print(f"Error fetching financial data: {e}")
+        return None

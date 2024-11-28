@@ -1,77 +1,83 @@
-# langchain_handler.py
-import os
-from transformers import pipeline
-from google.cloud import language_v1
-from google.cloud.language_v1 import enums
-from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
-from langchain.schema import BaseOutputParser
 from langchain.prompts import PromptTemplate
-from langchain_community.tools import Tool
+from data_fetcher import fetch_stock_data, fetch_financial_data, fetch_stock_news
+import os
+from langchain.llms import OpenAI 
 
+llm = OpenAI(api_key="OPENAI_KEY")
 
-# Set up Google Cloud NLP client
-client = language_v1.LanguageServiceClient()
+def generate_recommendation(ticker):
+    stock_history, stock_info = fetch_stock_data(ticker)
 
-# Hugging Face pipeline for text generation (reasoning and explanation)
-reasoning_generator = pipeline("text-generation", model="gpt2")  # Example using GPT-2 for text generation
+    if stock_info is None:
+        return "Error: No stock info available", "Could not fetch data for the given ticker."
 
-def analyze_sentiment_google_cloud(text: str) -> str:
-    """
-    Uses Google Cloud's NLP API to analyze sentiment of a text.
-    """
-    document = language_v1.Document(content=text, type_=language_v1.Document.Type.PLAIN_TEXT)
-    response = client.analyze_sentiment(document=document)
-    
-    sentiment_score = response.document_sentiment.score
-    
-    if sentiment_score > 0:
-        return "positive"
-    elif sentiment_score < 0:
-        return "negative"
+    # Check if 'currentPrice' is in stock_info
+    if 'currentPrice' in stock_info:
+        price = stock_info['currentPrice']  # Directly access the 'currentPrice' key
     else:
-        return "neutral"
+        return "Error: Missing 'currentPrice'", f"The stock data for {ticker} does not contain the 'currentPrice'."
 
+    # You can also fetch other useful data from stock_info
+    pe_ratio = stock_info.get('trailingPE', 'N/A')  # Use 'N/A' if P/E ratio is not available
+    market_cap = stock_info.get('marketCap', 'N/A')
 
-def generate_reasoning_explanation(prompt: str) -> str:
-    """
-    Uses Hugging Face's GPT-2 model for reasoning and explanation generation.
-    """
-    response = reasoning_generator(prompt, max_length=100)
-    return response[0]["generated_text"]
-
-
-class CustomOutputParser(BaseOutputParser):
-    def parse(self, text: str) -> str:
-        return text.strip()
-
-# Define a template for stock recommendations
-stock_recommendation_prompt = """
-Based on the given stock news, generate a recommendation for the stock. 
-
-Stock news: {news}
-
-Recommendation:
-"""
-
-def get_stock_recommendation(news: str) -> str:
-    """
-    Generate a stock recommendation based on the given news using Hugging Face model for reasoning.
-    """
-    # Generate the prompt
-    prompt = stock_recommendation_prompt.format(news=news)
+    # Fetching financial data
+    financial_data = fetch_financial_data(ticker)
     
-    # Get reasoning and explanation using Hugging Face (GPT-2)
-    reasoning = generate_reasoning_explanation(prompt)
-    
-    return reasoning
+    # Fetching the stock news data
+    news_data_list = fetch_stock_news(ticker)
 
+    # Handle news data and extract sentiment
+    if isinstance(news_data_list, list) and news_data_list:
+        sentiment = "Positive" if "positive" in news_data_list[0].get('title', '').lower() else "Negative"
+    else:
+        sentiment = "No Sentiment Data"
 
-# Example usage for sentiment analysis and stock recommendation
-def process_stock_news(news: str):
-    sentiment = analyze_sentiment_google_cloud(news)
-    print(f"Sentiment of the news: {sentiment}")
-    
-    recommendation = get_stock_recommendation(news)
-    print(f"Stock Recommendation based on news: {recommendation}")
+    # Define the prompt to send to the model
+    prompt = f"""
+    You are a stock recommendation expert. Use the following data to provide a recommendation on whether the stock should be a "Buy", "Sell", or "Hold":
 
+    Stock Data: 
+    - Price: ${price}
+    - P/E Ratio: {pe_ratio}
+    - Market Cap: {market_cap}
+
+    News Sentiment: {sentiment}
+
+    Based on these inputs, recommend whether the stock is a "Buy", "Sell", or "Hold". Provide an explanation.
+    """
+
+    # Assuming you are using a simple function to call the model and get the result
+    llm_chain = LLMChain(prompt=PromptTemplate(input_variables=["input"], template=prompt), llm=llm)
+
+    # Generate the recommendation from the model
+    result = llm_chain.run({'input': prompt})
+
+    # Parse the result to extract recommendation and explanation
+    recommendation = parse_recommendation(result)
+    explanation = parse_explanation(result)
+
+    return recommendation, explanation
+
+# Helper functions to parse the recommendation and explanation
+def parse_recommendation(result):
+    if "buy" in result.lower():
+        return "Buy"
+    elif "sell" in result.lower():
+        return "Sell"
+    elif "hold" in result.lower():
+        return "Hold"
+    else:
+        return "Hold"  # Default to "Hold" if uncertain
+
+def parse_explanation(result):
+    # You can clean up or format the result for explanation if necessary
+    return result
+
+# Example of usage (for testing purposes)
+if __name__ == "__main__":
+    ticker = "AAPL"
+    recommendation, explanation = generate_recommendation(ticker)
+    print(f"Recommendation: {recommendation}")
+    print(f"Explanation: {explanation}")
